@@ -1,0 +1,180 @@
+[
+  {
+    "query": "What is the primary mechanism of resmetirom?",
+    "expected_keywords": ["THR", "thyroid", "liver", "beta"],
+    "expected_pmids": ["41868171", "40100944", "38771485"],
+    "query_type": "factoid",
+    "difficulty": "easy"
+  },
+  {
+    "query": "What lifestyle changes are recommended for MASLD?",
+    "expected_keywords": ["weight loss", "diet", "exercise", "alcohol"],
+    "expected_pmids": ["38851997", "38869512", "38852583"],
+    "query_type": "factoid",
+    "difficulty": "easy"
+  },
+  {
+    "query": "What is FIB-4 and when should it be used?",
+    "expected_keywords": ["FIB-4", "fibrosis", "score", "non-invasive"],
+    "expected_pmids": ["38851997", "38869512"],
+    "query_type": "factoid",
+    "difficulty": "easy"
+  },
+  {
+    "query": "Compare semaglutide and resmetirom for MASH treatment",
+    "expected_keywords": ["semaglutide", "resmetirom"],
+    "expected_pmids": [],
+    "query_type": "multi_hop",
+    "difficulty": "hard"
+  },
+  {
+    "query": "What was the outcome of the Phase 3 trial of semaglutide in MASH?",
+    "expected_keywords": ["semaglutide", "resolution", "fibrosis", "phase 3"],
+    "expected_pmids": ["40305708"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "How does semaglutide affect liver steatosis in NAFLD mouse models?",
+    "expected_keywords": ["semaglutide", "steatosis", "mouse", "lipogenesis"],
+    "expected_pmids": ["38474208", "36568109", "38583231"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "What is efruxifermin and what condition is it being tested for?",
+    "expected_keywords": ["efruxifermin", "cirrhosis", "MASH", "FGF21"],
+    "expected_pmids": ["40818852", "40341827", "37376813"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "What role do FXR agonists play in MASH therapy?",
+    "expected_keywords": ["FXR", "obeticholic", "bile acid"],
+    "expected_pmids": ["37899676"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "How does bariatric surgery affect MASLD outcomes?",
+    "expected_keywords": ["bariatric", "surgery", "weight"],
+    "expected_pmids": ["36722105", "37024216"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "What are the safety concerns with pioglitazone in NASH patients?",
+    "expected_keywords": ["pioglitazone", "safety", "prediabetes"],
+    "expected_pmids": ["27322798"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "How is MASLD diagnosed and classified according to the EASL-EASD-EASO guidelines?",
+    "expected_keywords": ["EASL", "guidelines", "diagnosis", "steatotic"],
+    "expected_pmids": ["38851997", "38869512", "38852583"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "What is known about MASLD in pediatric populations?",
+    "expected_keywords": ["children", "pediatric"],
+    "expected_pmids": ["39848671"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "What cardiovascular risks are associated with MASLD?",
+    "expected_keywords": ["cardiovascular", "risk"],
+    "expected_pmids": ["38228377", "39848507"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "What is the mechanism by which GLP-1 receptor agonists improve liver outcomes in MASLD?",
+    "expected_keywords": ["GLP-1", "receptor", "agonist"],
+    "expected_pmids": ["39735270", "39193573", "40538007"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "Compare the mechanisms of action of GLP-1 agonists and FGF21-based therapies in MASH",
+    "expected_keywords": ["GLP-1", "FGF21"],
+    "expected_pmids": [],
+    "query_type": "multi_hop",
+    "difficulty": "hard"
+  },
+  {
+    "query": "What did the combination therapy trial of semaglutide, cilofexor, and firsocostat find?",
+    "expected_keywords": ["cilofexor", "firsocostat", "combination"],
+    "expected_pmids": ["35439567"],
+    "query_type": "factoid",
+    "difficulty": "hard"
+  },
+  {
+    "query": "What is the recurrence risk of NASH after liver transplantation?",
+    "expected_keywords": ["transplant", "recurrence"],
+    "expected_pmids": ["28364816", "29641680"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "How does vitamin D relate to MAFLD?",
+    "expected_keywords": ["vitamin d", "fatty liver"],
+    "expected_pmids": ["33126575"],
+    "query_type": "factoid",
+    "difficulty": "medium"
+  },
+  {
+    "query": "What is belapectin and what was tested in its clinical trial?",
+    "expected_keywords": ["belapectin", "galectin"],
+    "expected_pmids": ["31812510"],
+    "query_type": "factoid",
+    "difficulty": "hard"
+  },
+  {
+    "query": "diabetes",
+    "expected_keywords": [],
+    "expected_pmids": [],
+    "query_type": "vague",
+    "difficulty": "hard"
+  },
+  {
+    "query": "MASH",
+    "expected_keywords": [],
+    "expected_pmids": [],
+    "query_type": "vague",
+    "difficulty": "hard"
+  },
+  {
+    "query": "What is the recommended dosage of metformin for treating MASH-related insulin resistance?",
+    "expected_keywords": [],
+    "expected_pmids": [],
+    "query_type": "factoid",
+    "difficulty": "refusal",
+    "note": "metformin is not covered in this corpus — the agent should refuse or express low confidence, not hallucinate a dosage"
+  },
+  {
+    "query": "What are the long-term survival rates for patients undergoing heart transplantation?",
+    "expected_keywords": [],
+    "expected_pmids": [],
+    "query_type": "factoid",
+    "difficulty": "refusal",
+    "note": "out-of-domain query, entirely unrelated to the MASLD/MASH corpus — the agent must refuse"
+  },
+  {
+    "query": "What is the capital of France?",
+    "expected_keywords": [],
+    "expected_pmids": [],
+    "query_type": "factoid",
+    "difficulty": "refusal",
+    "note": "sanity check: fully unrelated to clinical corpus, must refuse rather than answer from parametric knowledge"
+  },
+  {
+    "query": "What did the LEADS liver-on-a-chip model show about NASH drug testing?",
+    "expected_keywords": ["liver-on-a-chip", "LEADS", "drug testing"],
+    "expected_pmids": ["40391591"],
+    "query_type": "factoid",
+    "difficulty": "hard"
+  }
+]
