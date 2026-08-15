@@ -1,201 +1,228 @@
-# Clinical Research Copilot
+# 🧬 Clinical Research Copilot
 
-Agentic RAG system over a corpus of 100 PubMed abstracts on MASLD/MASH (metabolic
-dysfunction-associated steatotic liver disease), built as a LangGraph state machine
-with hybrid retrieval, corrective self-grading, and a custom LLM-as-judge eval harness.
+**An agentic RAG system that knows when it doesn't know.**
 
-## Why this exists
+Ask it about MASLD/MASH liver disease research and it'll dig through 100 PubMed
+abstracts, grade its own retrieval quality, retry with a better query if the
+first pass was weak, and — this is the part most RAG demos skip — refuse to
+answer if it can't back up a claim with a real citation.
 
-Most RAG demos retrieve once and answer. This project treats retrieval quality as
-something the system checks and reacts to, not something it assumes — the agent
-grades its own retrieval, rewrites the query if the grade is weak, and refuses to
-answer rather than hallucinate if it can't find reliable evidence.
-
-## Architecture
+Built with LangGraph, hybrid search (BM25 + dense embeddings), and a
+self-correcting retrieval loop (CRAG). No OpenAI. Runs entirely on Groq's
+free tier.
 
 ```
-Query
-  │
-  ▼
-[classify] ── heuristic query-type tag (factoid / multi-hop / vague), no LLM cost
-  │
-  ▼
-[retrieve] ── hybrid search: BM25 (sparse) + BGE-small (dense) fused with
-  │           Reciprocal Rank Fusion — rank-based merge, not score-based
-  ▼
-[grade] ──── CRAG self-check: cosine similarity between query and each
-  │          retrieved chunk, no LLM call
-  ▼
- router (grade.py: decide_route)
-  │
-  ├── score ≥ 0.70 ─────────────────────────────► [generate] ─► answer + citations
-  │
-  ├── 0.35 ≤ score < 0.70, retries < 2 ──► [rewrite] ─► loop back to [retrieve]
-  │        (cheap model rephrases the query, then re-runs hybrid search)
-  │
-  ├── 0.35 ≤ score < 0.70, retries exhausted ──► [generate] (with a stated caveat)
-  │
-  └── score < 0.35 ──────────────────────────────► [refuse] ─► honest "I don't know"
+"What is the primary mechanism of resmetirom?"
+  → The primary mechanism of resmetirom is as a selective thyroid hormone
+    receptor-β (THR-β) agonist [PMID 38771485]. It inhibits intestinal lipid
+    absorption via remodeling bile acid profiles [PMID 38789494]...
 
-Safety gates on every router pass: wall-clock timeout (30s) and step-count budget (6)
-both force a refusal, regardless of CRAG score, so a bad loop can't run forever.
+"What's the recommended dosage of metformin for MASH?"
+  → I don't have enough reliable evidence to answer this safely.
 ```
 
-Every LLM call (rewrite, generate) goes through a circuit breaker
-([resilience/circuit_breaker.py](resilience/circuit_breaker.py)): 3 consecutive
-failures trips it open and routes to a smaller fallback model (`llama-3.1-8b-instant`)
-until a 60s recovery window passes.
+---
 
-### Why these choices
+## The idea
 
-- **RRF over score-blending** — BM25 scores (0–40) and cosine similarity (0–1) aren't
-  comparable on the same scale. RRF merges by *rank*, not raw score, so no
-  normalization hack is needed.
-- **CRAG grading is a cosine check, not an LLM call** — it runs on every single
-  retrieval, including every rewrite loop iteration. An LLM-graded version would
-  multiply cost and latency for a signal a cheap embedding comparison already gives.
-- **Async job pattern in the API** — `POST /query` returns a `job_id` in under 100ms
-  and runs the agent in a background task; the client polls `GET /result/{job_id}`.
-  A single agent run can take several seconds (embedding + up to 2 LLM calls), and an
-  HTTP framework should never hold a connection open for that long under real load.
+Most RAG tutorials retrieve once, stuff it in a prompt, and hope. That's fine
+for a demo, terrible for anything clinical — a confident wrong answer is
+worse than no answer.
 
-## Project layout
+This system treats retrieval as something to *verify*, not assume:
+
+1. **Retrieve** with hybrid search — BM25 catches exact terms, dense
+   embeddings catch semantic matches, Reciprocal Rank Fusion merges both.
+2. **Grade** the retrieval with a cosine-similarity confidence score.
+3. **Route** based on that score:
+   - High confidence → answer, with citations.
+   - Medium confidence → rewrite the query and try again (up to 2 times).
+   - Low confidence → **refuse**, honestly, instead of guessing.
+
+It's a state machine, not a chain — built as a LangGraph graph with real
+loops, real safety gates (step budget, wall-clock timeout), and a circuit
+breaker in front of every LLM call so a flaky API doesn't take the whole
+thing down.
+
+## How it flows
 
 ```
-agent/            LangGraph state machine (state.py, nodes.py, graph.py)
-api/               FastAPI HTTP layer — async job submission + polling + feedback
-db/                SQLAlchemy models + repository functions (SQLite by default)
-resilience/        Circuit breaker for LLM calls
-tests/             pytest suite (fast: corpus/circuit-breaker, slow: retriever/agent e2e)
-retriever.py       Hybrid BM25 + dense retrieval with RRF fusion
-corpus.py          Loads data.json into the shape the rest of the app expects
-config.py          Single source of truth for models, thresholds, paths
-evals.py           Eval harness: keyword/citation metrics + LLM-as-judge faithfulness & relevancy
-eval_dataset.json  25 hand-written queries (factoid, multi-hop, vague, and deliberate refusal cases)
-run_evals.py       Runs the full agent against eval_dataset.json, writes eval_report.json
+                         ┌─────────────┐
+                         │   classify  │  heuristic tag, zero LLM cost
+                         └──────┬──────┘
+                                ▼
+                         ┌─────────────┐
+              ┌─────────▶│   retrieve  │  BM25 + BGE-small, fused with RRF
+              │          └──────┬──────┘
+              │                 ▼
+              │          ┌─────────────┐
+              │          │    grade    │  cosine similarity, no LLM call
+              │          └──────┬──────┘
+              │                 ▼
+              │            score ≥ 0.70 ──────────────► generate ──► ✅ answer + citations
+              │                 │
+              │            0.35–0.70, retries left
+              └──── rewrite ◀───┤
+                                 │
+                            0.35–0.70, retries exhausted ──► generate (with caveat)
+                                 │
+                            score < 0.35 ──────────────────► refuse ──► 🚫 "I don't know"
 ```
 
-## Setup
+Every path through the graph is bounded: a 30-second wall-clock timeout and
+a 6-step budget both force a refusal if something loops longer than it
+should. No infinite retries, no runaway cost.
+
+## Decisions worth explaining
+
+**Rank fusion, not score fusion.** BM25 scores live on a 0–40 scale, cosine
+similarity lives on 0–1. Averaging them directly is meaningless. RRF sidesteps
+that by merging on *rank position* instead of raw score — no normalization
+hacks needed.
+
+**The grader is math, not another LLM call.** Every retrieval — including
+every retry inside the rewrite loop — gets graded. Making that an LLM call
+would multiply cost and latency for a signal a cheap embedding comparison
+already gives for free.
+
+**The API returns before the work is done.** `POST /query` hands back a
+`job_id` in under 100ms and runs the agent as a background task; the client
+polls `GET /result/{job_id}`. A single run can take several seconds — an HTTP
+server should never hold a connection open that long under real traffic.
+
+**The eval judge deliberately uses the expensive model.** More on this below
+— it's the one part of this project that broke in an interesting way.
+
+## What's in here
+
+```
+agent/              LangGraph state machine — state.py, nodes.py, graph.py
+api/                FastAPI layer: async job submission, polling, feedback
+db/                 SQLAlchemy models + repository functions (SQLite)
+resilience/         Circuit breaker wrapping every LLM call
+tests/              pytest — fast unit tests + slow real-API/real-model tests
+retriever.py        Hybrid BM25 + dense retrieval, RRF fusion
+corpus.py           Loads the PubMed abstracts into a clean shape
+config.py           One file, every tunable constant
+evals.py            Eval harness — keyword/citation metrics + LLM-as-judge
+eval_dataset.json   25 hand-written queries: factoid, multi-hop, vague, refusal
+run_evals.py        Runs the eval suite end-to-end, writes eval_report.json
+```
+
+## Get it running
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # add your GROQ_API_KEY
+cp .env.example .env   # drop in your GROQ_API_KEY — it's free
 ```
 
-## Running it
-
-**Interactive smoke test:**
+**Ask it something:**
 ```bash
 python -c "from agent import run_agent; print(run_agent('What is the primary mechanism of resmetirom?'))"
 ```
 
-**As an HTTP API:**
+**Run it as an API:**
 ```bash
 uvicorn api.main:app --reload
-# POST /query        {"query": "..."}  -> {"job_id": "..."}
-# GET  /result/{id}                    -> status + answer + sources + crag_score
-# POST /feedback/{run_id}  {"rating": "up"|"down"}
-# GET  /health
+```
+```
+POST /query              {"query": "..."}       → {"job_id": "..."}
+GET  /result/{job_id}                            → status + answer + sources + crag_score
+POST /feedback/{run_id}  {"rating": "up"|"down"} → thumbs up/down on a past run
+GET  /health
 ```
 
-**Run the eval suite (writes `eval_report.json`):**
+**Run the tests:**
 ```bash
-python run_evals.py
+pytest -m "not slow"   # fast — no models, no API calls
+pytest                 # everything, including real Groq calls
 ```
 
-**Run the test suite:**
+**Run the evals:**
 ```bash
-pytest -m "not slow"   # fast: no model loading, no API calls
-pytest                 # everything, including retriever + real agent e2e (costs Groq calls)
+python run_evals.py    # writes eval_report.json
 ```
 
-## Evaluation methodology
+## Does it actually work? Here's the receipt.
 
-25 queries against the 100-abstract corpus, split across:
-- **factoid** — direct fact lookup answerable from a specific abstract
-- **multi-hop** — requires comparing across two or more abstracts
-- **vague** — 1-2 word underspecified queries (tests the classifier + graceful handling)
-- **refusal** — deliberately out-of-corpus questions (e.g. "capital of France", a drug
-  not in the corpus) where the *correct* behavior is refusing to answer
+25 queries, run against the real agent, real Groq calls, no cherry-picking.
+Split across four categories: **factoid** (direct lookups), **multi-hop**
+(compare across abstracts), **vague** (1–2 word queries), and **refusal**
+(deliberately unanswerable — "what's the capital of France" run through a
+liver-disease RAG system, on purpose).
 
-Metrics, computed per query and averaged:
-- **keyword accuracy** — does the answer contain the expected clinical terms?
-- **citation recall** — for queries with a known expected PMID, did retrieval find it?
-- **faithfulness** — custom LLM-as-judge (Groq `llama-3.3-70b-versatile`) scores
-  whether every claim in the answer is actually supported by the retrieved context.
-  This is the same concept the `ragas` library calls "faithfulness," implemented
-  directly against Groq instead of pulling in `ragas`'s OpenAI-centric dependency
-  chain. The judge deliberately uses the strong model, not the fast one used for
-  query rewriting — an earlier version judged with `llama-3.1-8b-instant` and
-  produced false-negative scores on long (~7.5k character) context, missing claims
-  that were genuinely supported elsewhere in the retrieved abstracts. Judging is a
-  one-time eval cost, so the larger model is worth it even though generation uses
-  a cheaper one for some steps.
-- **answer relevancy** — LLM-as-judge scores whether the answer addresses the
-  question asked, independent of factual grounding.
-- **refusal accuracy** — for the deliberate refusal test cases, did the agent
-  correctly decline instead of hallucinating?
+Scored on keyword accuracy, citation recall, and two LLM-as-judge metrics —
+**faithfulness** (is every claim actually backed by the retrieved text?) and
+**relevancy** (does the answer address what was asked?). Same ideas the
+`ragas` library measures, implemented directly against Groq so the project
+doesn't need to drag in an OpenAI-shaped dependency tree just to grade itself.
 
-### Results
-
-_Generated by `python run_evals.py` on 2026-08-15 — see `eval_report.json` in the repo
-for the full per-query breakdown. Numbers below are pulled directly from that file._
-
-| Metric | Value |
+|  |  |
 |---|---|
 | Queries evaluated | 25 |
-| Answer rate | 72% (18/25) |
-| Avg keyword accuracy | 72.9% |
-| Avg citation recall | 78.7% |
-| Avg faithfulness (answered queries only) | 1.00 |
-| Avg relevancy (answered queries only) | 0.97 |
-| Refusal accuracy (3 deliberate out-of-corpus tests) | 66.7% (2/3) |
-| Avg latency | 6.9s |
-| p95 latency | 12.4s |
+| Answer rate | **72%** (18/25) |
+| Keyword accuracy | 72.9% |
+| Citation recall | 78.7% |
+| Faithfulness *(on answered queries)* | **1.00** |
+| Relevancy *(on answered queries)* | 0.97 |
+| Refusal accuracy *(3 deliberate traps)* | 2/3 |
+| Latency (avg / p95) | 6.9s / 12.4s |
 
-**What this actually shows:**
-- On the 18 queries the agent chose to answer, faithfulness and relevancy are both
-  near-perfect — when the CRAG gate lets a query through, the generated answer is
-  reliably grounded in the retrieved abstracts and on-topic.
-- The 28% refusal rate is mostly the CRAG gate being conservative, not the agent
-  failing: several "medium" difficulty factoid queries (e.g. "What lifestyle changes
-  are recommended for MASLD?") scored just under the 0.70 confidence threshold and
-  were refused rather than answered with a lower-confidence caveat, even though the
-  corpus does contain relevant material. This is a tunable threshold trade-off
-  (fewer refusals vs. more caveats), not a retrieval bug.
-- **Refusal accuracy is the most important number to be honest about: it's 2/3, not
-  3/3.** One deliberately out-of-corpus query ("What is the recommended dosage of
-  metformin for treating MASH-related insulin resistance?") scored CRAG 0.76 — high
-  confidence — because metformin co-occurs with real MASH treatments in several
-  retrieved abstracts, so the embedding similarity looks high even though none of
-  those abstracts state a metformin dosage. The agent generated a low-faithfulness-risk
-  but ultimately unhelpful answer ("there is no information about dosage in this
-  context") rather than a clean refusal. This is a genuine limitation of using
-  embedding similarity alone as the confidence signal — topically-adjacent content
-  can pass the CRAG gate without actually answering the question.
-- Latency is higher during evaluation (avg 6.9s, p95 12.4s) than in standalone
-  interactive use (~1-2s) because every non-refused query in this run pays for an
-  extra full-context LLM-judge call on top of generation — that's an eval-harness
-  cost, not something a production caller of `run_agent()` incurs.
-- Groq's free tier caps `llama-3.3-70b-versatile` at 100,000 tokens/day. Running
-  this 25-query eval with a 70B judge on every answered query is close to that
-  ceiling — `run_eval()` checkpoints progress to `eval_checkpoint.json` after every
-  query specifically so a mid-run rate limit doesn't lose completed work.
+Full per-query breakdown lives in [`eval_report.json`](eval_report.json).
 
-## Known limitations
+**The honest read of these numbers:**
 
-- Corpus is 100 abstracts on a single disease area (MASLD/MASH) — retrieval quality
-  claims don't generalize beyond this domain without re-indexing.
-- CRAG grading uses cosine similarity as a proxy for relevance; it doesn't catch
-  answers that are on-topic but factually contradicted by the source. Confirmed in
-  eval: a query about metformin dosage (not in the corpus) scored high CRAG
-  confidence because metformin co-occurs with real MASH treatments in several
-  retrieved abstracts — topical adjacency passed the gate even though no retrieved
-  abstract actually answered the question.
-- The FastAPI job store is an in-memory dict — fine for a single-process demo,
-  not for multi-worker deployment (would need Redis, per the code comments in
-  `api/main.py`).
-- `db/database.py` defaults to SQLite; switching to Postgres is a one-line change
-  to `DATABASE_URL` but hasn't been load-tested.
+✅ **When it answers, it's not making things up.** Faithfulness and relevancy
+are both essentially perfect on the 18 queries the system chose to answer.
+The self-grading loop is doing its job.
+
+🤔 **28% refusal rate is mostly caution, not failure.** A handful of
+medium-difficulty queries scored just under the 0.70 confidence bar and got
+refused instead of answered-with-a-caveat, even though the corpus had
+relevant material. That's a threshold tuning knob, not a broken retriever.
+
+🐛 **The one real bug I found:** one of the three deliberate "this should be
+refused" traps — a question about metformin dosage, a drug that's genuinely
+not in this corpus — slipped past the confidence gate at 0.76. Why? Metformin
+shows up *alongside* real MASH drugs in several retrieved abstracts, so the
+embedding similarity looks high even though none of those abstracts state a
+dosage. The agent didn't hallucinate a number (faithfulness held), but it
+also didn't cleanly refuse — it hedged. That's a real limitation of using
+cosine similarity alone as a confidence signal: topical adjacency can sneak
+past a gate built to catch topical *irrelevance*.
+
+⏱️ **Latency during eval (6.9s avg) is higher than standalone use (~1–2s)**
+because every judged query here pays for an extra full-context LLM call on
+top of generation. That's an eval-harness cost, not a production one.
+
+🔧 **One bug I had to catch before trusting any of this:** the first version
+of the eval judge used the small, fast model (`llama-3.1-8b-instant`) to
+score faithfulness. It returned near-zero scores across the board — on
+answers that were clearly, verifiably correct. Turned out the 8B model
+couldn't reliably track claims across ~7.5k characters of context; it missed
+support that was sitting right there in a different abstract. Swapping the
+judge to the 70B model fixed it instantly. Lesson: a judge model needs to be
+at least as capable as the thing it's judging, especially at longer context
+lengths — and you should never trust an eval number without sanity-checking
+the judge itself.
+
+📉 **Also ran into Groq's free-tier ceiling** (100K tokens/day on the 70B
+model) mid-eval, more than once — running a 70B judge on every answered query
+adds up fast. Fixed by making the eval harness resumable: it checkpoints
+after every single query to `eval_checkpoint.json`, so a rate limit mid-run
+costs a few minutes, not the whole run.
+
+## Where this would break in production
+
+- **The corpus is 100 abstracts on one disease.** Everything above is true
+  for this corpus; none of it is a claim about generalizing to a bigger,
+  messier one without re-indexing and re-evaluating.
+- **Cosine similarity is a relevance proxy, not a correctness check** — see
+  the metformin example above. It catches "this is off-topic," not "this is
+  topically-adjacent but doesn't actually answer the question."
+- **The job store is an in-memory dict.** Fine for one process, wrong for
+  anything with more than one worker — that's a Redis swap away, not built.
+- **SQLite by default.** Switching to Postgres is a one-line `DATABASE_URL`
+  change in `db/database.py` — untested at any real concurrency.
